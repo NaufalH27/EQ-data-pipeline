@@ -67,7 +67,7 @@ def process_message(message):
 
     with lock:
         total_consumed += 1
-        print(f"Messages consumed: {total_consumed}", end="\r", flush=True)
+        print(f"Messages consumed: {total_consumed} Latest data consumed : {tx_hash}", end="\r", flush=True)
 
 for msg in consumer:
     process_message(msg)

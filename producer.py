@@ -30,10 +30,11 @@ def on_message(ws, message):
     except json.JSONDecodeError as e:
         return
     producer.send("blockchain", value=data)
+    tx_hash = data.get("x", {}).get("hash", "N/A")
     with lock:
         global total_produce
         total_produce += 1
-        print(f"message sent: {total_produce}", end="\r", flush=True)
+        print(f"message sent: {total_produce} latest data sent : {tx_hash}", end="\r", flush=True)
     producer.flush()
 
 
