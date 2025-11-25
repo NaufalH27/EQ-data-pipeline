@@ -1,18 +1,20 @@
 # messaging-simulation
 messaging simulation using kafka + scylla
 
+data stream : https://www.blockchain.com/explorer/api/api_websocket
+
 install requirement python package:
-<pre> ``` 
+<pre> 
   pip install -r requirements
-``` </pre>
+</pre>
 
 run docker compose :
-<pre> ``` 
+<pre> 
 docker-compose -f docker-compose.kafka.yaml -f docker-compose.scylla.yaml up -d
-``` </pre>
+ </pre>
 
 run the script:
-<pre> ``` 
+<pre>  
 python producer.py
 python consumer.py
-``` </pre>
+ </pre>
