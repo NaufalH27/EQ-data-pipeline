@@ -5,7 +5,7 @@ data stream : https://www.blockchain.com/explorer/api/api_websocket
 
 install requirement python package:
 ```
-  pip install -r requirements
+  pip install -r requirements.txt
 ```
 
 run docker compose :
