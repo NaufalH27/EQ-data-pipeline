@@ -1,73 +1,73 @@
 import json
-from kafka import KafkaConsumer
+from datetime import datetime
+from confluent_kafka import Consumer
 from cassandra.cluster import Cluster
-from cassandra.query import SimpleStatement
-from threading import Lock
 
-cluster = Cluster(['127.0.0.1'], port=9042)  
+
+consumer = Consumer({
+    "bootstrap.servers": "localhost:9092",
+    "group.id": "seismic-consumer",
+    "auto.offset.reset": "earliest"
+})
+
+consumer.subscribe(["seismic"])  
+
+
+cluster = Cluster(['127.0.0.1'], port=9042)
 session = cluster.connect()
 
 session.execute("""
-    CREATE KEYSPACE IF NOT EXISTS blockchain
-    WITH replication = {'class': 'SimpleStrategy', 'replication_factor': '3'}
+    CREATE KEYSPACE IF NOT EXISTS seismic
+    WITH replication = {'class': 'SimpleStrategy', 'replication_factor': '1'}
 """)
 
 session.execute("""
-    CREATE TABLE IF NOT EXISTS blockchain.transactions (
-        tx_hash text PRIMARY KEY,
-        lock_time int,
-        ver int,
-        size int,
-        time bigint,
-        vin_sz int,
-        vout_sz int,
-        relayed_by text,
-        inputs text,
-        outputs text
+    CREATE TABLE IF NOT EXISTS seismic.waveform (
+        network text,
+        station text,
+        location text,
+        channel text,
+        starttime timestamp,
+        endtime timestamp,
+        sampling_rate double,
+        total_sample int,
+        data list<double>,
+        PRIMARY KEY ((network, station, channel), starttime, endtime)
     )
 """)
 
 insert_query = session.prepare("""
-    INSERT INTO blockchain.transactions (
-        tx_hash, lock_time, ver, size, time, vin_sz, vout_sz, relayed_by, inputs, outputs
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO seismic.waveform (
+        network, station, location, channel,
+        starttime, endtime,
+        sampling_rate, total_sample, data
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 """)
 
-consumer = KafkaConsumer(
-    'blockchain',
-    bootstrap_servers=['localhost:9092'],
-    value_deserializer=lambda m: json.loads(m.decode('utf-8')),
-    auto_offset_reset='earliest',
-    enable_auto_commit=True,
-    group_id='scylla_consumer'
-)
 
-lock = Lock()
-total_consumed = 0
+while True:
+    msg = consumer.poll(1.0)
 
-def process_message(message):
-    global total_consumed
-    data = message.value
+    if msg is None:
+        continue
 
-    x = data.get("x", {})
-    tx_hash = x.get("hash")
-    lock_time = x.get("lock_time")
-    ver = x.get("ver")
-    size = x.get("size")
-    time_field = x.get("time")
-    vin_sz = x.get("vin_sz")
-    vout_sz = x.get("vout_sz")
-    relayed_by = x.get("relayed_by")
-    inputs = json.dumps(x.get("inputs", []))
-    outputs = json.dumps(x.get("out", []))
+    message = json.loads(msg.value().decode("utf-8"))
 
-    session.execute(insert_query, (
-        tx_hash, lock_time, ver, size, time_field, vin_sz, vout_sz, relayed_by, inputs, outputs
-    ))
+    session.execute(
+        insert_query, (
+            message["network"],
+            message["station"],
+            message["location"],
+            message["channel"],
+            datetime.fromisoformat(message["starttime"].replace("Z", "")),
+            datetime.fromisoformat(message["endtime"].replace("Z", "")),
+            message["sampling_rate"],
+            message["total_sample"],
+            message["data"],
+        )
+    )
 
-    with lock:
-        total_consumed += 1
-        print(f"Messages consumed: {total_consumed} Latest data consumed : {tx_hash}", end="\r", flush=True)
-
-for msg in consumer:
-    process_message(msg)
+    print(
+        f"Inserted: {message['station']} {message['channel']} "
+        f"{message['starttime']} samples={message['total_sample']}"
+    )
