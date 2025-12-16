@@ -9,3 +9,4 @@ scipy==1.10.0
 pydantic==2.12.5
 pandas==1.4.3
 cassandra-driver==3.29.3
+minio==7.2.20

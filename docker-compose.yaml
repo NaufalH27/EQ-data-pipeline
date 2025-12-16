@@ -42,6 +42,27 @@ services:
       - 9042:9042 # Use this port for the Cassandra native protocol
     networks:
       vnet:
+  minio:
+    image: quay.io/minio/minio:latest 
+    container_name: minio
+    ports:
+      - "9000:9000"
+      - "9001:9001" 
+    environment:
+      MINIO_ROOT_USER: minioadmin 
+      MINIO_ROOT_PASSWORD: minioadmin 
+    volumes:
+      - ./minio/data:/data 
+    command: server /data --console-address ":9001" 
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  minio_data:
+
 
 networks:
   vnet:

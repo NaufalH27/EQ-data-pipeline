@@ -1,6 +1,8 @@
+import io
 import json
 import time
 from typing import Optional, Type, TypeVar, Generic, List, Tuple
+from minio import Minio
 import numpy as np
 from confluent_kafka import Consumer
 from eqt_predict_tf29 import predict
@@ -13,6 +15,46 @@ from datetime import datetime
 from cassandra.cluster import Cluster
 from cassandra.query import SimpleStatement
 
+#MinIo
+minio_client = Minio("localhost:9000",
+    access_key="minioadmin",
+    secret_key="minioadmin",
+    secure=False
+)
+MINIO_BUCKET = "seismic"
+if not minio_client.bucket_exists(MINIO_BUCKET):
+    minio_client.make_bucket(MINIO_BUCKET)
+
+def upload_npz_to_minio(bucket, object_name, **arrays):
+    """
+    Upload multiple NumPy arrays as a single .npz file to MinIO.
+
+    Example:
+        upload_npz_to_minio(
+            bucket,
+            "XLMG08/20251216152052/window.npz",
+            trace=trace_array,
+            pp=pp_array,
+            ss=ss_array,
+            dd=dd_array
+        )
+    """
+    buffer = io.BytesIO()
+    np.savez(buffer, **arrays)
+    buffer.seek(0)
+    data = buffer.getvalue()
+    minio_client.put_object(
+        bucket_name=bucket,
+        object_name=object_name,
+        data=io.BytesIO(data),
+        length=len(data),
+        content_type="application/octet-stream"
+    )
+
+print(f"minio client created with bucket : {MINIO_BUCKET}")
+
+
+# Scylla
 cluster = Cluster(['127.0.0.1'], port=9042)  
 session = cluster.connect()
 KEYSPACE = "seismic_data"
@@ -28,20 +70,25 @@ session.execute("""
         station text,
         starttime timestamp,
         endtime timestamp,
+        sampling_rate double,
+        num_channels int,
+        samples_per_channel int,
+        channel_order text, 
         minio_ref text,
         PRIMARY KEY ((network, station), starttime)
     ) WITH CLUSTERING ORDER BY (starttime ASC);
 """)
+
+
 
 print("Scylla table window_prediction loaded")
 
 
 
 # MODELS
-MODEL_PATH = "components/EqT_original_model.h5"
-GPU_MEMORY_LIMIT=3050
+MODEL_PATH = "components/EqT_model_conservative.h5"
+GPU_MEMORY_LIMIT=2000
 gpus = tf.config.experimental.list_physical_devices('GPU')
-
 if gpus:
     try:
         tf.config.experimental.set_virtual_device_configuration(
@@ -70,8 +117,7 @@ print(f"EqTransfomer model loaded ({MODEL_PATH})")
 # KAFKA
 conf = {
     "bootstrap.servers": "localhost:9092",
-    "group.id": "seismic-consumer5",
-    "enable.auto.commit": False,
+    "group.id": "seismic-consumer",
     "auto.offset.reset": "earliest"
 }
 
@@ -90,7 +136,7 @@ class SeismicWindow(BaseModel):
     sampling_rate: float
     data: np.ndarray
     samples_per_channel: int
-    channel_order: Optional[Tuple[str, ...]] = None
+    channel_order: Tuple[str, ...]
     num_channels: int
     total_samples: int
     sample_counts: Tuple[int, ...]
@@ -146,6 +192,7 @@ if RING_BUFFER_LENGTH % 1 != 0:
 rb = RingBuffer(maxlen=int(RING_BUFFER_LENGTH),dtype=SeismicWindow)
 
 try :
+    print("EVERYTHING STARTED")
     while True:
         msg = consumer.poll(1.0) 
         if msg is None:
@@ -166,11 +213,13 @@ try :
         expected_shape = (int(WINDOW_SECONDS * window.sampling_rate),3)
         if window.data.shape != expected_shape:
             print(f"window shape not aligned {window.data.shape} != {expected_shape} for data {window.starttime}-{window.endtime} ")
+            print("rebuilding data buffer...")
             rb.delete_all()
             continue
 
         if window.channel_order != ("Z", "N", "E"):
             print(f"window channel not true {window.channel_order} != ZNE for data {window.starttime}-{window.endtime} ")
+            print("rebuilding data buffer...")
             rb.delete_all()
             continue
 
@@ -182,6 +231,7 @@ try :
                 rb.append(window)
             elif window.starttime > latest.endtime:
                 print(f"data not aligned {window.starttime} > {latest.endtime}")
+                print("rebuilding data buffer...")
                 rb.delete_all()
                 continue
             elif window.starttime < latest.endtime:
@@ -194,24 +244,47 @@ try :
             preds = predict(model=model, seismic_trace=merged_trace)
             end = time.perf_counter()
             elapsed = end - start
+            print(f"window {window.starttime} - {window.endtime} predicted successfully in {elapsed}")
             pp_window = preds["PP_mean"][-400:]
             ss_window = preds["SS_mean"][-400:]
             dd_window = preds["DD_mean"][-400:]
-            print(f"window {window.starttime} - {window.endtime} predicted successfully in {elapsed}")
+            timestamp = window.starttime.strftime("%Y%m%d%H%M%S")
+            dirname = f"{window.network}{window.station}"
+            minio_ref = f"{dirname}/{timestamp}_window.npz"
 
-            # minio_ref = "a"
+            upload_npz_to_minio(
+                MINIO_BUCKET,
+                minio_ref,
+                trace=window.data,
+                pp=pp_window,
+                ss=ss_window,
+                dd=dd_window
+            )
 
-            # insert_stmt = session.prepare("""
-            #     INSERT INTO window_predictions (
-            #         network, station, starttime, endtime, minio_ref
-            #     ) VALUES (?, ?, ?, ?, ?)
-            # """)
-            # session.execute(
-            #     insert_stmt,
-            #     (window.network, window.station, window.starttime, window.endtime, minio_ref)
-            # )
-            # print(f"Inserted window {window.starttime}-{window.endtime} into Scylla with minio_ref={minio_ref}")
+            insert_stmt = session.prepare("""
+                INSERT INTO window_predictions (
+                    network, station, starttime, endtime,
+                    sampling_rate, num_channels, samples_per_channel,
+                    channel_order, minio_ref
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """)
 
+            channel_order_str = ",".join(window.channel_order) if window.channel_order else None
+
+            session.execute(
+                insert_stmt,
+                (
+                    window.network,
+                    window.station,
+                    window.starttime,
+                    window.endtime,
+                    window.sampling_rate,
+                    window.num_channels,
+                    window.samples_per_channel,
+                    channel_order_str,
+                    minio_ref
+                )
+            )
 
 
 except KeyboardInterrupt:
