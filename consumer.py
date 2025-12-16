@@ -39,12 +39,20 @@ print("Scylla table window_prediction loaded")
 
 # MODELS
 MODEL_PATH = "components/EqT_original_model.h5"
+GPU_MEMORY_LIMIT=3050
 gpus = tf.config.experimental.list_physical_devices('GPU')
 
-tf.config.experimental.set_virtual_device_configuration(
-    gpus[0],
-    [tf.config.experimental.VirtualDeviceConfiguration(memory_limit=3050)]
-)
+if gpus:
+    try:
+        tf.config.experimental.set_virtual_device_configuration(
+            gpus[0],
+            [tf.config.experimental.VirtualDeviceConfiguration(memory_limit=GPU_MEMORY_LIMIT)]
+        )
+        print(f"Using GPU: {gpus[0].name}")
+    except RuntimeError as e:
+        print("Error setting GPU configuration:", e)
+else:
+    print("No GPU found. Using CPU.")
 
 model = load_model(
     MODEL_PATH,
