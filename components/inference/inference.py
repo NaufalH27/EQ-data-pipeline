@@ -156,8 +156,8 @@ sensors: dict[str, Sensor] = {}
 try :
     # MODELS
     print(f"intializing EqTransformer Model")
-    MODEL_PATH = "artifacts/EqT_model_conservative.h5"
-    MODEL_NAME = "EqTransformer-tf29"
+    MODEL_PATH = "artifacts/EqT_model_original.h5"
+    MODEL_NAME = "EqTransformer-original-tf29"
     GPU_MEMORY_LIMIT=2000
     gpus = tf.config.experimental.list_physical_devices('GPU')
     if gpus:
@@ -188,7 +188,7 @@ try :
     print("connecting kafka")
     conf = {
         "bootstrap.servers": "localhost:9092",
-        "group.id": "seismic-consumer",
+        "group.id": "seismic-consumer50",
         "auto.offset.reset": "earliest",
     }
 
@@ -222,8 +222,8 @@ except Exception as e:
         pass
     sys.exit(1)
 
-def raw_consumer(sensor: Sensor, consumer: Consumer):
-    print(f"raw data consumer for {sensor.key} created")
+def raw_consumer(consumer: Consumer):
+    print(f"raw data consumer created")
     # read incoming kafka message
     while True:
         msg = consumer.poll(1.0) 
@@ -243,6 +243,7 @@ def raw_consumer(sensor: Sensor, consumer: Consumer):
         if window.key not in sensors:
             print(f"sensor {window.key} not found, skipping")
             continue
+        sensor = sensors[window.key]
 
         # if window not 500, 3 when sampling rate = 100hz and window time 5 seconds. 3 means NZE or 3 channel, this for ensuring that data are exactly 6000,3
         expected_shape = (sensor.window_size, 3)
@@ -338,6 +339,7 @@ def prediction_producer(sensor: Sensor, producer: Producer):
                 res = sliced_results[j]
                 message = {
                     "key": sensor.key,
+                    "model_name":MODEL_NAME,
                     "network": sensor.network,
                     "station": sensor.station,
                     "sensor_code": sensor.sensor_code,
@@ -386,7 +388,7 @@ if __name__ == "__main__":
             for key, s in sensors.items():
                 rw = threading.Thread(
                     target=raw_consumer,
-                    args=(sensor, consumer),
+                    args=(consumer,),
                     daemon=True
                 )
                 rw.start()
