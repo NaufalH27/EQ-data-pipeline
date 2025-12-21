@@ -131,7 +131,7 @@ def create_tables(client, config: ClickHouseConfig):
                 pp_i AS pp,
                 ss_i AS ss,
 
-                _offset AS version
+                toInt64(-_offset) AS version
             FROM kafka_seismic_predictions
             ARRAY JOIN
                 arrayEnumerate(trace) AS idx,

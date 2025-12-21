@@ -183,7 +183,7 @@ def prediction_emitter(sensor: InferenceSensor, producerService: KafkaProducerSe
     logger.info(f"Prediction Producer for {sensor.key} created")
     producer = producerService.get_producer()
     while True:
-        windows_batches = sensor.get_window_batches(6)
+        windows_batches = sensor.get_window_batches(3)
 
         if len(windows_batches) == 0:
             continue

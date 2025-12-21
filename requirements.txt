@@ -11,4 +11,4 @@ pandas==1.4.3
 cassandra-driver==3.29.3
 minio==7.2.20
 clickhouse-connect==0.10.0
-python-dotenv-1.2.1
+python-dotenv==1.2.1

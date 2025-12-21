@@ -64,6 +64,7 @@ class ScyllaService:
                 model_name,
                 created_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            IF NOT EXISTS
             """
         )
 
