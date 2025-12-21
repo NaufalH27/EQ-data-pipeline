@@ -5,6 +5,9 @@ services:
     container_name: broker
     ports:
       - 9092:9092
+    networks:
+      vnet:
+
     environment:
       KAFKA_BROKER_ID: 1
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT,CONTROLLER:PLAINTEXT
@@ -42,6 +45,9 @@ services:
       - 9042:9042 # Use this port for the Cassandra native protocol
     networks:
       vnet:
+    depends_on:
+    - broker
+
   minio:
     image: quay.io/minio/minio:latest 
     container_name: minio
@@ -54,15 +60,28 @@ services:
     volumes:
       - ./minio/data:/data 
     command: server /data --console-address ":9001" 
-    healthcheck:
-      test: ["CMD", "mc", "ready", "local"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
+    networks:
+      vnet:
+    depends_on:
+    - broker
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:latest
+    container_name: clickhouse
+    ports:
+      - 8080:8080
+      - 8123:8123
+    environment:
+      CLICKHOUSE_USER: admin
+      CLICKHOUSE_PASSWORD: admin
+    networks:
+      vnet:
+    depends_on:
+    - broker
+
 
 volumes:
   minio_data:
-
 
 networks:
   vnet:

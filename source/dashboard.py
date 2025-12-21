@@ -12,7 +12,6 @@ from cassandra.cluster import Cluster
 from minio import Minio
 
 
-# ================= CONFIG =================
 
 CASSANDRA_HOSTS = ["127.0.0.1"]
 KEYSPACE = "seismic_data"
@@ -28,12 +27,8 @@ P_THRESHOLD = 0.3
 S_THRESHOLD = 0.3
 MIN_DISTANCE_SEC = 0.5
 
-# ================= STREAMLIT =================
-
 st.set_page_config(layout="wide")
 st.title("Seismic Streaming Dashboard")
-
-# ================= CONNECTIONS =================
 
 @st.cache_resource
 def get_cassandra():
@@ -51,7 +46,6 @@ def get_minio():
 session = get_cassandra()
 minio = get_minio()
 
-# ================= METADATA =================
 
 @st.cache_data
 def get_key_model_pairs():
@@ -66,7 +60,6 @@ def get_key_model_pairs():
 
     return sorted(latest.keys(), key=lambda x: latest[x])
 
-# ================= DATA LOAD =================
 
 @st.cache_data
 @st.cache_data
@@ -133,8 +126,6 @@ def load_data(key, model):
     }
 
 
-# ================= PLOT =================
-
 def make_figure(data, t_start, t_end):
     mask = (data["time"] >= t_start) & (data["time"] <= t_end)
 
@@ -174,8 +165,6 @@ def make_figure(data, t_start, t_end):
 
     return fig
 
-# ================= UI (FIXED) =================
-
 pairs = get_key_model_pairs()
 labels = [f"{k} | {m}" for k, m in pairs]
 
@@ -187,7 +176,6 @@ DATA = load_data(key, model)
 t_min = DATA["time"][0]
 t_max = DATA["time"][-1]
 
-# ---- PURE NUMPY TIME ----
 duration_sec = int((t_max - t_min) / np.timedelta64(1, "s"))
 
 window_sec = st.slider(

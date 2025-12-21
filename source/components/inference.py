@@ -1,28 +1,18 @@
-from datetime import datetime, timedelta
+from datetime import datetime
 import json
+import logging
 import math
-import sys
 import threading
 import time
-from typing import Dict, List, Set, Tuple
+from typing import Dict, List, Tuple
 import numpy as np
-from confluent_kafka import Consumer, Producer
-from confluent_kafka.admin import AdminClient, NewTopic
 from obspy import UTCDateTime
-import pandas as pd
-from eqt_predict_api_tf29 import predict
-import tensorflow as tf
-from keras.models import load_model
-from eqt_predict_api_tf29 import SeqSelfAttention, FeedForward, LayerNormalization, f1
 from pydantic import BaseModel, ConfigDict, field_validator
 from scipy.signal import resample_poly
+from source.infra import KafkaConsumerService, KafkaProducerService, EqTransformerService
+from source.lib.eqt_tf29.core import predict
 
-WINDOW_SECONDS = 5
-if 60 % WINDOW_SECONDS != 0:
-    print(
-        f"WINDOW_SECONDS ({WINDOW_SECONDS}) must divide 60 exactly"
-    )
-    sys.exit(1)
+logger = logging.getLogger("inference")
 
 class SeismicWindow(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
@@ -42,7 +32,7 @@ class SeismicWindow(BaseModel):
     def convert_data_to_numpy(cls, v):
         return np.array(v, dtype=np.float32)
 
-class Sensor:
+class InferenceSensor:
     def __init__(
         self,
         key: str,
@@ -51,6 +41,7 @@ class Sensor:
         fs: int,
         sensor_code: str,
         orientation: str,
+        window_seconds: int
     ):
         self.key = key
         self._windows: Dict[int, SeismicWindow] = {}
@@ -60,14 +51,15 @@ class Sensor:
         self.sensor_code = sensor_code
         self.orientation = orientation
         self.fs = fs
-        self.window_size = WINDOW_SECONDS * fs
+        self.window_seconds = window_seconds
+        self.window_size = window_seconds * fs
 
     def insert_window(self, window: SeismicWindow) -> None:
         delta_seconds = (window.starttime - UTCDateTime(0).datetime).total_seconds()
-        if delta_seconds % WINDOW_SECONDS != 0:
+        if delta_seconds % self.window_seconds != 0:
             raise ValueError("unaligned window start")
 
-        delta = int(delta_seconds // WINDOW_SECONDS)
+        delta = int(delta_seconds // self.window_seconds)
         with self._windows_lock:
             self._windows[delta] = window
 
@@ -96,7 +88,7 @@ class Sensor:
         self, overlap: int
     ) -> List[List[SeismicWindow]]:
 
-        context = 60 // WINDOW_SECONDS
+        context = 60 // self.window_seconds
         if overlap < 0 or overlap >= context:
             raise ValueError("overlap must be >= 0 and < context")
         with self._windows_lock:
@@ -114,7 +106,6 @@ class Sensor:
             windows_arr[k - beginning] = (k, w)
 
         n = len(windows_arr)
-
         valid_starts : List[int] = []
         for i in range(0, n - context + 1):
             if any(v is None for v in windows_arr[i:i+context]):
@@ -151,117 +142,46 @@ class Sensor:
         return results
 
 
-sensors: dict[str, Sensor] = {}
-
-try :
-    # MODELS
-    print(f"intializing EqTransformer Model")
-    MODEL_PATH = "artifacts/EqT_model_original.h5"
-    MODEL_NAME = "EqTransformer-original-tf29"
-    GPU_MEMORY_LIMIT=2000
-    gpus = tf.config.experimental.list_physical_devices('GPU')
-    if gpus:
-        try:
-            tf.config.experimental.set_virtual_device_configuration(
-                gpus[0],
-                [tf.config.experimental.VirtualDeviceConfiguration(memory_limit=GPU_MEMORY_LIMIT)]
-            )
-            print(f"Using GPU: {gpus[0].name}")
-        except RuntimeError as e:
-            print("Error setting GPU configuration:", e)
-    else:
-        print("No GPU found. Using CPU.")
-
-    model = load_model(
-        MODEL_PATH,
-        custom_objects={
-            'SeqSelfAttention': SeqSelfAttention,
-            'FeedForward': FeedForward,
-            'LayerNormalization': LayerNormalization,
-            'f1': f1
-        }
-    )
-
-    print(f"EqTransfomer model loaded ({MODEL_PATH})")
-
-    # KAFKA
-    print("connecting kafka")
-    conf = {
-        "bootstrap.servers": "localhost:9092",
-        "group.id": "seismic-consumer50",
-        "auto.offset.reset": "earliest",
-    }
-
-    consumer = Consumer(conf)
-    consumer.subscribe(["seismic"])
-
-    admin_client = AdminClient({
-        "bootstrap.servers": "localhost:9092"
-    })
-    producer = Producer({
-        "bootstrap.servers": "localhost:9092"
-    })
-
-    topic_name = "seismic-predictions"
-    new_topic = NewTopic(topic_name, num_partitions=1, replication_factor=1)
-    fs = admin_client.create_topics([new_topic])
-
-    for topic, f in fs.items():
-        try:
-            f.result()
-            print(f"Topic {topic} created")
-        except Exception:
-            print(f"INFO: Topic '{topic}' already exists")
-
-except Exception as e:
-    print("error initialization :", e)
-    print("Terminating processes…")
-    try:
-        consumer.close()
-    except Exception:
-        pass
-    sys.exit(1)
-
-def raw_consumer(consumer: Consumer):
-    print(f"raw data consumer created")
+def process_window(sensors: dict[str, InferenceSensor], consumerService: KafkaConsumerService):
+    logger.info(f"raw data consumer created")
     # read incoming kafka message
+    consumer = consumerService.get_consumer()
     while True:
         msg = consumer.poll(1.0) 
         if msg is None:
             continue
 
         if msg.error():
-            print("Consumer error:", msg.error())
+            logger.warning("Consumer error (skipping data):", msg.error())
             continue
 
         message = json.loads(msg.value().decode("utf-8"))
         try:
             window = SeismicWindow(**message)
         except Exception as e:
-            print("Failed to convert json to SeismicWindow object:", e)
+            logger.warning("Failed to convert json to SeismicWindow object (skipping):", e)
             continue
         if window.key not in sensors:
-            print(f"sensor {window.key} not found, skipping")
+            logger.warning(f"sensor {window.key} not found, skipping")
             continue
         sensor = sensors[window.key]
 
         # if window not 500, 3 when sampling rate = 100hz and window time 5 seconds. 3 means NZE or 3 channel, this for ensuring that data are exactly 6000,3
         expected_shape = (sensor.window_size, 3)
         if window.trace.shape != expected_shape:
-            print(f"window shape not aligned {window.trace.shape} != {expected_shape} for data {window.starttime}-{window.endtime} ")
-            print("rebuilding data buffer...")
+            logger.warning(f"window shape not aligned {window.trace.shape} != {expected_shape} for data {window.starttime}-{window.endtime} ")
             continue
 
         if window.orientation_order != sensor.orientation:
-            print(f"window channel not true {window.orientation_order} != {sensor.orientation} for window {window.starttime}-{window.endtime} ")
-            print("rebuilding data buffer...")
+            logger.warning(f"window channel not true {window.orientation_order} != {sensor.orientation} for window {window.starttime}-{window.endtime} skipping...")
             continue
         sensor.insert_window(window)
-        print(f"window {sensor.key} {window.starttime} - {window.endtime} inserted")
+        logger.debug(f"window {sensor.key} {window.starttime} - {window.endtime} inserted")
 
 
-def prediction_producer(sensor: Sensor, producer: Producer):
-    print(f"Prediction Producer for {sensor.key} created")
+def prediction_emitter(sensor: InferenceSensor, producerService: KafkaProducerService, eqt: EqTransformerService, topic_name:str ):
+    logger.info(f"Prediction Producer for {sensor.key} created")
+    producer = producerService.get_producer()
     while True:
         windows_batches = sensor.get_window_batches(6)
 
@@ -285,7 +205,7 @@ def prediction_producer(sensor: Sensor, producer: Producer):
                     traces[i] = resample_poly(traces[i], up=up, down=down)
                 merged_trace = np.concatenate(traces, axis=0)
                 if merged_trace.shape != (6000, 3):
-                    print(
+                    logger.warning(
                         f"sampling rate {sensor.fs}Hz not supported "
                         f"for {windows[0].key}, skipping..."
                     )
@@ -294,21 +214,21 @@ def prediction_producer(sensor: Sensor, producer: Producer):
             merged_traces.append(merged_trace)
             window_infos.append(windows)
 
-        print(f"predicting window {sensor.key} {windows_batches[0][0].starttime} - {windows_batches[-1][-1].endtime}")
+        logger.info(f"predicting window {sensor.key} {windows_batches[0][0].starttime} - {windows_batches[-1][-1].endtime}")
         start = time.perf_counter()
         try:
             predictions = predict(
-                model=model,
+                model=eqt.model,
                 seismic_traces=np.array(merged_traces),  # shape: (num_windows, 6000, 3)
                 batch_size=16
             )
             end = time.perf_counter()
             elapsed = end - start
-            print(f"window {sensor.key} {windows_batches[0][0].starttime} - {windows_batches[-1][-1].endtime} predicted successfully in {'{:.2f}'.format(elapsed)} seconds")
+            logger.info(f"window {sensor.key} {windows_batches[0][0].starttime} - {windows_batches[-1][-1].endtime} predicted successfully in {'{:.2f}'.format(elapsed)} seconds")
         except Exception as e:
-            print(f"window {sensor.key} {windows_batches[0][0].starttime} - {windows_batches[-1][-1].endtime} fail to predict")
-            print("cause: ", e)
-            print(f"skipping batches...")
+            logger.warning(f"window {sensor.key} {windows_batches[0][0].starttime} - {windows_batches[-1][-1].endtime} fail to predict")
+            logger.warning("cause: ", e)
+            logger.warning(f"skipping batches...")
             continue
             
         for i, windows in enumerate(window_infos):
@@ -332,18 +252,18 @@ def prediction_producer(sensor: Sensor, producer: Producer):
             indices = np.cumsum(lengths)
             sliced_results = np.split(merged_results, indices[:-1])
             if (len(sliced_results) != len(windows)):
-                print(f"window {sensors.key} {window.starttime} - {window.endtime} data bug, skipping..")
+                logger.warning(f"window {sensor.key} {window.starttime} - {window.endtime} data bug, skipping..")
                 continue
 
             for j, window in enumerate(windows):
                 res = sliced_results[j]
                 message = {
                     "key": sensor.key,
-                    "model_name":MODEL_NAME,
+                    "model_name":eqt.model_name,
                     "network": sensor.network,
                     "station": sensor.station,
                     "sensor_code": sensor.sensor_code,
-                    "sampling_rate": sensor.fs,
+                    "sampling_rate": 100,
                     "size_per_window": sensor.window_size,
                     "orientation_order": sensor.orientation,
                     "starttime": window.starttime.isoformat(),
@@ -354,66 +274,7 @@ def prediction_producer(sensor: Sensor, producer: Producer):
                     "ss": res[:, 5].tolist(),
                 }
 
-                producer.produce(topic_name, value=json.dumps(message).encode("utf-8"))
+                producer.produce(topic=topic_name, value=json.dumps(message).encode("utf-8"))
                 producer.poll(0)
-                print(f"sending to producer {sensor.key}: {window.starttime} - {window.endtime}")
+                logger.info(f"sending to predict consumer {sensor.key}: {window.starttime} - {window.endtime}")
         time.sleep(2)
-
-if __name__ == "__main__":
-    try:
-        df = pd.read_csv("artifacts/station_list.csv")
-        threads = []
-        for _, row in df.iterrows():
-            network = row["network"]
-            station = row["station"]
-            sensor_code = row["sensor_code"]          # XX
-            orientation = row["orientation_order"]    # e.g. ZNE
-            fs = int(row["sampling_rate"])
-
-            if not isinstance(orientation, str) and len(orientation) != 3:
-                raise ValueError(
-                    f"{network}.{station}.{sensor_code} invalid orientation_order: {orientation}, correct example : ZNE"
-                )
-
-            sensor_key = f"{network}.{station}.{sensor_code}"
-            sensor = sensors[sensor_key] = Sensor(
-                key=sensor_key,
-                network=network,
-                station=station,
-                fs=fs,
-                sensor_code=sensor_code,
-                orientation=orientation
-            )
-            print(f"created sensor {sensor_key} ({orientation})")
-            for key, s in sensors.items():
-                rw = threading.Thread(
-                    target=raw_consumer,
-                    args=(consumer,),
-                    daemon=True
-                )
-                rw.start()
-                threads.append(rw)
-                pp = threading.Thread(
-                    target=prediction_producer,
-                    args=(sensor, producer),
-                    daemon=True
-                )
-                pp.start()
-                threads.append(pp)
-        print("EVERYTHING STARTED")
-        while True: 
-            time.sleep(1)
-
-    except KeyboardInterrupt:
-        print("Caught KeyboardInterrupt, stopping…")
-        sys.exit(0)
-    finally:
-        print("Terminating processes…")
-        try:
-            consumer.close()
-            producer.flush()
-        except Exception:
-            pass
-        sys.exit(0)
-
-
