@@ -1,0 +1,8 @@
+stramlit 
+streamlit-autorefresh
+clickhouse-connect 
+plotly 
+numpy 
+pandas
+cassandra-driver
+minio

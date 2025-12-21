@@ -106,7 +106,7 @@ def create_tables(client, config: ClickHouseConfig):
 
     client.command(
         """
-            CREATE MATERIALIZED VIEW mv_predictions
+            CREATE MATERIALIZED VIEW IF NOT EXISTS mv_predictions
             TO predicted_samples
             AS
             SELECT
