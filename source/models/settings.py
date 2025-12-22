@@ -18,11 +18,6 @@ class AppSettings:
     scylla_kafka_group: str
     clickhouse_kafka_group: str
 
-    minio_endpoint: str
-    minio_access_key: str
-    minio_secret_key: str
-    bucket_name: str
-
     model_path: str
     model_name: str
 
@@ -53,11 +48,6 @@ class AppSettings:
             raw_window_kafka_group=os.environ["RAW_WINDOW_KAFKA_GROUP"],
             scylla_kafka_group=os.environ["SCYLLA_KAFKA_GROUP"],
             clickhouse_kafka_group=os.environ["CLICKHOUSE_KAFKA_GROUP"],
-
-            minio_endpoint=os.environ["MINIO_ENDPOINT"],
-            minio_access_key=os.environ["MINIO_ACCESS_KEY"],
-            minio_secret_key=os.environ["MINIO_SECRET_KEY"],
-            bucket_name=os.environ["BUCKET_NAME"],
 
             model_path=os.environ["MODEL_PATH"],
             model_name=os.environ["MODEL_NAME"],

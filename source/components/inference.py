@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 import json
 import logging
 import math
@@ -183,7 +183,7 @@ def prediction_emitter(sensor: InferenceSensor, producerService: KafkaProducerSe
     logger.info(f"Prediction Producer for {sensor.key} created")
     producer = producerService.get_producer()
     while True:
-        windows_batches = sensor.get_window_batches(3)
+        windows_batches = sensor.get_window_batches(6)
 
         if len(windows_batches) == 0:
             continue
@@ -257,24 +257,26 @@ def prediction_emitter(sensor: InferenceSensor, producerService: KafkaProducerSe
 
             for j, window in enumerate(windows):
                 res = sliced_results[j]
-                message = {
-                    "key": sensor.key,
-                    "model_name":eqt.model_name,
-                    "network": sensor.network,
-                    "station": sensor.station,
-                    "sensor_code": sensor.sensor_code,
-                    "sampling_rate": 100,
-                    "size_per_window": sensor.window_size,
-                    "orientation_order": sensor.orientation,
-                    "starttime": window.starttime.isoformat(),
-                    "endtime": window.endtime.isoformat(),
-                    "trace": res[:, 0:3].tolist(),
-                    "dd": res[:, 3].tolist(),
-                    "pp": res[:, 4].tolist(),
-                    "ss": res[:, 5].tolist(),
-                }
+                for i, sample in enumerate(res):
+                    milliseconds = i * 10 
+                    ts = window.starttime + timedelta(milliseconds=milliseconds)
 
-                producer.produce(topic=topic_name, value=json.dumps(message).encode("utf-8"))
-                producer.poll(0)
+                    message = {
+                        "key": sensor.key,
+                        "model_name":eqt.model_name,
+                        "ts": ts.isoformat(timespec="milliseconds"),
+                        "network": sensor.network,
+                        "station": sensor.station,
+                        "sensor_code": sensor.sensor_code,
+                        "orientation_order": sensor.orientation,
+                        "trace1":float(sample[0]),
+                        "trace2":float(sample[1]),
+                        "trace3":float(sample[2]),
+                        "dd": float(sample[3]),
+                        "pp": float(sample[4]),
+                        "ss": float(sample[5]),
+                    }
+                    producer.produce(topic=topic_name, value=json.dumps(message).encode("utf-8"))
+                    producer.poll(0)
                 logger.info(f"sending to predict consumer {sensor.key}: {window.starttime} - {window.endtime}")
         time.sleep(2)

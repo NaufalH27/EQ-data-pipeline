@@ -50,7 +50,7 @@ def create_tables(client, config: ClickHouseConfig):
     print("Creating ClickHouse tables...")
 
     client.command(
-        """
+    """
         CREATE TABLE IF NOT EXISTS predicted_samples
         (
             key String,
@@ -59,20 +59,21 @@ def create_tables(client, config: ClickHouseConfig):
             station LowCardinality(String),
             sensor_code LowCardinality(String),
             orientation_order FixedString(3),
-            sampling_rate Float32,
             ts DateTime64(3),
+
             uid UInt64 MATERIALIZED cityHash64(key, model_name, ts),
-            version UInt64,
-            trace_1 Float32,
-            trace_2 Float32,
-            trace_3 Float32,
+
+            trace1 Float32,
+            trace2 Float32,
+            trace3 Float32,
             dd Float32,
             pp Float32,
             ss Float32
         )
-        ENGINE = ReplacingMergeTree(version)
-        ORDER BY (uid)
-        """
+        ENGINE = ReplacingMergeTree(dd)
+        PARTITION BY toYYYYMM(ts)
+        ORDER BY uid;
+    """
     )
 
     client.command(
@@ -81,18 +82,17 @@ def create_tables(client, config: ClickHouseConfig):
         (
             key String,
             model_name String,
+            ts DateTime64(3),
             network String,
             station String,
             sensor_code String,
             orientation_order String,
-            sampling_rate Float32,
-            size_per_window UInt32,
-            starttime DateTime64(3),
-            endtime DateTime64(3),
-            trace Array(Array(Float32)),
-            dd Array(Float32),
-            pp Array(Float32),
-            ss Array(Float32)
+            trace1 Float32,
+            trace2 Float32,
+            trace3 Float32,
+            dd Float32,
+            pp Float32,
+            ss Float32
         )
         ENGINE = Kafka
         SETTINGS
@@ -115,33 +115,17 @@ def create_tables(client, config: ClickHouseConfig):
                 network,
                 station,
                 sensor_code,
-                substring(orientation_order, 1, 3) AS orientation_order,
-                sampling_rate,
-
-                starttime
-                + toIntervalMicrosecond(
-                        ((idx - 1) * 1000000) / sampling_rate
-                    ) AS ts,
-
-
-                trace_i[1] AS trace_1,
-                trace_i[2] AS trace_2,
-                trace_i[3] AS trace_3,
-                dd_i AS dd,
-                pp_i AS pp,
-                ss_i AS ss,
-
-                toInt64(-_offset) AS version
-            FROM kafka_seismic_predictions
-            ARRAY JOIN
-                arrayEnumerate(trace) AS idx,
-                trace AS trace_i,
-                dd    AS dd_i,
-                pp    AS pp_i,
-                ss    AS ss_i;
+                orientation_order,
+                ts,
+                trace1,
+                trace2,
+                trace3,
+                dd,
+                pp,
+                ss
+            FROM kafka_seismic_predictions;
         """
     )
-
     print("ClickHouse objects ready")
 
 

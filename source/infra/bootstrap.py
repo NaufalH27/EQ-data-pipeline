@@ -1,7 +1,7 @@
 import logging
 
 from source.models import AppSettings, InfraServices
-from source.infra import KafkaAdmin, KafkaConfig,KafkaProducerService, KafkaConsumerService, EqTransformerService, MinioClientService, ClickHouseConfig, bootstrap_clickhouse, ScyllaService
+from source.infra import KafkaAdmin, KafkaConfig,KafkaProducerService, KafkaConsumerService, EqTransformerService, ClickHouseConfig, bootstrap_clickhouse, ScyllaService
 from source.lib import SeqSelfAttention, LayerNormalization, FeedForward, f1 
 
 logger = logging.getLogger("infra")
@@ -58,15 +58,6 @@ def bootstrap_infra(settings: AppSettings) -> InfraServices:
             topics=[settings.prediction_seismic_topic],
         )
 
-        logger.info("Initializing MinIO client")
-        minio = MinioClientService(
-            endpoint=settings.minio_endpoint,
-            access_key=settings.minio_access_key,
-            secret_key=settings.minio_secret_key,
-            bucket=settings.bucket_name,
-            secure=False,
-        )
-
         logger.info("Loading EqTransformer model")
         eqt = EqTransformerService(
             model_path=settings.model_path,
@@ -87,7 +78,6 @@ def bootstrap_infra(settings: AppSettings) -> InfraServices:
             producer=producer,
             window_consumer=window_consumer,
             prediction_consumer_scylla=prediction_consumer_scylla,
-            minio=minio,
             scylla=scylla,
             eqt=eqt,
         )

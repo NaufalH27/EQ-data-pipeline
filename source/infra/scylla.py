@@ -1,20 +1,17 @@
 from cassandra.cluster import Cluster
-from cassandra.cluster import Session
-from cassandra.query import PreparedStatement
+from cassandra.cluster import Cluster
+from datetime import datetime, timezone
+from cassandra.query import BatchStatement
+
 
 class ScyllaService:
-    def __init__(
-        self,
-        hosts: list[str],
-        port: int,
-        keyspace: str,
-    ):
+    def __init__(self, hosts: list[str], port: int, keyspace: str):
         print("Connecting to ScyllaDB")
         self._keyspace = keyspace
         self.cluster = Cluster(hosts, port=port)
-        self.session: Session = self.cluster.connect()
+        self.session = self.cluster.connect()
         self._init_schema()
-        self.insert_stmt: PreparedStatement = self._prepare_statements()
+        self._prepare_statements()
 
     def _init_schema(self) -> None:
         self.session.execute(
@@ -26,53 +23,93 @@ class ScyllaService:
             }};
             """
         )
-
         self.session.set_keyspace(self._keyspace)
 
         self.session.execute(
             """
-            CREATE TABLE IF NOT EXISTS window_predictions (
+            CREATE TABLE IF NOT EXISTS predicted_samples (
                 key text,
-                starttime timestamp,
-                endtime timestamp,
+                model_name text,
+                day date,
+                ts timestamp,
                 network text,
                 station text,
                 sensor_code text,
-                sampling_rate double,
-                num_channels int,
-                samples_per_channel int,
-                total_samples int,
                 orientation_order text,
-                minio_ref text,
-                model_name text,
+                trace1 float,
+                trace2 float,
+                trace3 float,
+                dd float,
+                pp float,
+                ss float,
                 created_at timestamp,
-                PRIMARY KEY ((key, model_name), starttime)
-            ) WITH CLUSTERING ORDER BY (starttime ASC);
+                PRIMARY KEY ((key, model_name, day), ts)
+            );
             """
         )
 
-    def _prepare_statements(self) -> PreparedStatement:
-        return self.session.prepare(
+        self.session.execute(
             """
-            INSERT INTO window_predictions (
-                key, starttime, endtime,
+                CREATE TABLE IF NOT EXISTS predicted_sample_bucket_by_day (
+                    key text,
+                    model_name text,
+                    day date,
+                    PRIMARY KEY ((key, model_name), day)
+                ) WITH CLUSTERING ORDER BY (day DESC);
+            """
+        )
+
+    def _prepare_statements(self) -> None:
+        self.insert_stmt = self.session.prepare(
+            """
+            INSERT INTO predicted_samples (
+                key, model_name, day, ts, 
                 network, station, sensor_code,
-                sampling_rate, num_channels,
-                samples_per_channel, total_samples,
                 orientation_order,
-                minio_ref,
-                model_name,
+                trace1, trace2, trace3,
+                dd, pp, ss,
                 created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            IF NOT EXISTS
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """
         )
 
-    def insert_prediction(self, values: tuple) -> None:
-        self.session.execute(self.insert_stmt, values)
+        self.insert_day_index = self.session.prepare(
+            """
+            INSERT INTO predicted_sample_bucket_by_day (key, model_name, day)
+            VALUES (?, ?, ?)
+            """
+        )
 
-    def get_session(self) -> Session:
-        return self.session
+    def insert_predictions_batch(self, predictions) -> None:
+        batch = BatchStatement()
 
-    def close(self) -> None:
-        self.cluster.shutdown()
+        now = datetime.now(timezone.utc)
+        
+        for p in predictions:
+            day = p.ts.date()
+            bound = self.insert_stmt.bind((
+                p.key,
+                p.model_name,
+                day,
+                p.ts,
+                p.network,
+                p.station,
+                p.sensor_code,
+                p.orientation_order,
+                p.trace1,
+                p.trace2,
+                p.trace3,
+                p.dd,
+                p.pp,
+                p.ss,
+                now
+            ))
+
+            base_ts = int(p.ts.timestamp() * 1_000_000)
+            priority = int(p.dd * 1_000)
+            bound.timestamp = base_ts + priority
+
+            batch.add(bound)
+            batch.add(self.insert_day_index.bind((p.key, p.model_name, day)))
+
+        self.session.execute(batch)

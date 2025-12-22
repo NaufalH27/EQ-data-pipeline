@@ -102,7 +102,7 @@ def main():
     process_window_t.start()
     threads.append(process_window_t)
 
-    start_scylla_sink(infra.prediction_consumer_scylla, infra.minio, infra.scylla)
+    start_scylla_sink(infra.prediction_consumer_scylla, infra.scylla)
 
     try:
         while True:

@@ -1,6 +1,5 @@
 from .scylla import ScyllaService
 from .model import EqTransformerService
-from .minio import MinioClientService
 from .kafka import (
     KafkaConfig,
     KafkaAdmin,
@@ -19,7 +18,6 @@ from .bootstrap import bootstrap_infra
 __all__ = [
     "ScyllaService",
     "EqTransformerService",
-    "MinioClientService",
     "KafkaConfig",
     "KafkaAdmin",
     "KafkaProducerService",

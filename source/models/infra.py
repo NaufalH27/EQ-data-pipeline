@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from source.infra import KafkaAdmin, KafkaProducerService, KafkaConsumerService, EqTransformerService, MinioClientService, ScyllaService
+from source.infra import KafkaAdmin, KafkaProducerService, KafkaConsumerService, EqTransformerService, ScyllaService
 
 @dataclass
 class InfraServices:
@@ -7,7 +7,6 @@ class InfraServices:
     producer: KafkaProducerService
     window_consumer: KafkaConsumerService
     prediction_consumer_scylla: KafkaConsumerService
-    minio: MinioClientService
     scylla: ScyllaService
     eqt: EqTransformerService
 
