@@ -1,40 +1,44 @@
-# messaging-simulation
-messaging simulation using kafka + scylla
+# Data Streaming Pipeline for Earthquake Predition
 
-data stream : https://www.blockchain.com/explorer/api/api_websocket
+you can add more station to process through resources/station_list.csv you need to specify the sampling rate for each station, because the system expect fixed amount of sampling rate <br>
 
-install requirement python package:
+here is the high level architecture of the system:
+
+<img width="1513" height="825" alt="Screenshot 2025-12-23 211248" src="https://github.com/user-attachments/assets/393ddcff-cc23-4a9b-bb4e-44a6e531c412" />
+
+you can run this on your own computer in any os (i think)
+
+## Run the data pipeline
+
+i recomend use python 3.10 virtual enivorement because this system use tf2.9
+
+after activate the python virtual enviorement, install requirement python package:
 ```
   pip install -r requirements.txt
 ```
 
 run docker compose :
 ```
-docker-compose -f docker-compose.kafka.yaml -f docker-compose.scylla.yaml up -d
+docker-compose up -d
 ```
 
-run the script:
+run the application:
 ```
-python producer.py
-python consumer.py
+python -m source.main
 ```
 
-# training
+yeah that it...
 
-install EQTransformer :
 
- = create and start venv (must be 3.10.5) :
- ```
- python -3.10 -m venv eqt_venv
- eqt_venv\Scripts\activate # (windows)
- source eqt_venv/bin/activate # (linux/MacOS)
- ```
+## Run The Dashboard
+you need different virtual env here because there is dependency conflict between tensorflow 2.9 and newer version of streamlit <br>
+you can use any version to be honest
+after activate the python virtual enviorement, install requirement python package for dashboard:
+```
+  pip install -r requirements-ui.txt
+```
+run the application:
+```
+streamlit run python/dashboard.py
+```
 
- - run this line :
- ```
- pip install tensorflow==2.9.0 keras==2.9.0 numpy==1.22.4 scipy==1.10.0 matplotlib==3.5.2 pandas==1.4.3 h5py==3.6.0 obspy==1.3.0 tqdm==4.64.0 jupyter==1.0.0 pytest==7.1.2 keyring==23.7.0 pkginfo==1.8.3 
- ``` 
- - install EQTransformer 0.1.61 without dependencies :
- ```
- pip install git+https://github.com/smousavi05/EQTransformer --no-deps
- ``` 
