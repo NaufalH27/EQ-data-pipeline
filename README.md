@@ -23,7 +23,7 @@ you just need to clone this repo first:
 ```
 git clone https://github.com/NaufalH27/EQ-data-pipeline/
 ```
-and follow the next construction :
+and follow the next instruction :
 
 ## Run the data pipeline
 
