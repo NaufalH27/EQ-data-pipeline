@@ -141,7 +141,7 @@ def window_emitter(sensor:IngestSensor, producerService :KafkaProducerService, t
             if not sensor.windows:
                 time.sleep(0.1)
                 continue
-            keys = sorted(sensor.windows)
+            keys = sorted(sensor.windows)[5:]
             while keys:
                 w_key = keys[0]
                 w = sensor.windows[w_key]
